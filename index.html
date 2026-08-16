@@ -48,9 +48,18 @@
   const unique = values => [...new Set(values)];
   async function details(source, url) { const html = await text(url); return { source, url, title:meta(html,'og:title') || meta(html,'twitter:title'), description:meta(html,'og:description') || meta(html,'description'), image:meta(html,'og:image') || meta(html,'twitter:image') }; }
   async function makerworld(q) {
-    const url = `https://makerworld.com/api/v1/search-service/suggest2?keyword=${encodeURIComponent(q)}&include=design`;
-    const data = await text(url, true), designs = data.design || data.data?.design || data.result?.design || [];
-    return designs.slice(0,6).map(d => ({ source:'makerworld', url:`https://makerworld.com/en/models/${d.id}`, title:d.titleTranslated||d.title, description:d.summary||d.description||'Open this model for details and print files.', image:d.cover||d.coverUrl||d.image||d.thumbnail }));
+    // `select/design2` is MakerWorld's ranked results endpoint. A searchSessionId
+    // is returned in its response and is only needed if later pages are requested.
+    const params = new URLSearchParams({ orderBy:'score', designType:'0', isFromSearchList:'false', keyword:q, limit:'6', offset:'0' });
+    const data = await text(`https://makerworld.com/api/v1/search-service/select/design2?${params}`, true);
+    return (data.hits || []).map(d => ({
+      source:'makerworld',
+      url:`https://makerworld.com/en/models/${d.id}${d.slug ? `-${d.slug}` : ''}`,
+      title:d.titleTranslated || d.title,
+      // The list endpoint does not send a long description, so use its real creator and tags.
+      description:[d.designCreator?.name && `By ${d.designCreator.name}`, ...(d.tags || []).slice(0,3)].filter(Boolean).join(' · ') || 'Open this model for details and print files.',
+      image:d.cover || d.coverLandscape || d.coverPortrait || d.designExtension?.design_pictures?.[0]?.url
+    }));
   }
   async function scrape(source, q, pattern, base) {
     const html = await text(info[source].search(q));
