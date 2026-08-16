@@ -33,86 +33,20 @@
     </section>
   </main>
 <script>
-  // The proxy makes a static GitHub Pages deployment possible. Replace it with your own
-  // tiny serverless proxy for a production app to avoid public-proxy rate limits.
-  const proxy = url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+  // Replace this with the address Cloudflare gives your deployed Worker.
+  const API_BASE = 'https://YOUR-WORKER.workers.dev';
   const info = {
-    makerworld: { name:'MakerWorld', cls:'mw', search:q=>`https://makerworld.com/en/search/models?keyword=${encodeURIComponent(q)}` },
-    printables: { name:'Printables', cls:'pr', search:q=>`https://www.printables.com/search/models?q=${encodeURIComponent(q)}` },
-    thingiverse: { name:'Thingiverse', cls:'tv', search:q=>`https://www.thingiverse.com/search?q=${encodeURIComponent(q)}&type=things&sort=relevant` }
+    makerworld: { name:'MakerWorld', cls:'mw' },
+    printables: { name:'Printables', cls:'pr' },
+    thingiverse: { name:'Thingiverse', cls:'tv' }
   };
   const $ = s => document.querySelector(s);
-  const timeout = ms => new Promise((_, reject) => setTimeout(() => reject(new Error('Timed out')), ms));
-  async function text(url, json=false) {
-    const r = await Promise.race([fetch(proxy(url)), timeout(14000)]);
-    if (!r.ok) throw Error('Source unavailable');
-    const body = await r.text();
-    if (!json) return body;
-    try { return JSON.parse(body); }
-    catch { throw Error('The public proxy returned an incomplete response'); }
-  }
-  const meta = (html, key) => { const doc = new DOMParser().parseFromString(html,'text/html'); return doc.querySelector(`meta[property="${key}"],meta[name="${key}"]`)?.content || ''; };
-  const unique = values => [...new Set(values)];
-  const firstCount = (html, keys) => { for (const key of keys) { const match = html.match(new RegExp(`(?:"|\\\\")${key}(?:"|\\\\")\\s*:\\s*(\\d+)`, 'i')); if (match) return Number(match[1]); } return null; };
-  async function details(source, url) {
-    const html = await text(url);
-    const downloads = firstCount(html, ['download_count','downloadCount']);
-    const likes = firstCount(html, ['like_count','likeCount','likesCount']);
-    return { source, url, title:meta(html,'og:title') || meta(html,'twitter:title'), description:meta(html,'og:description') || meta(html,'description'), image:meta(html,'og:image') || meta(html,'twitter:image'), metricValue:downloads ?? likes, metricLabel:downloads != null ? 'downloads' : likes != null ? 'likes' : '' };
-  }
-  async function makerworldSlice(q, offset) {
-    // The list response includes extensive model-file metadata. AllOrigins truncates
-    // a 20-item response, so request one ranked result at a time and reassemble page 1.
-    const params = new URLSearchParams({ orderBy:'score', designType:'0', isFromSearchList:'false', keyword:q, limit:'1', offset:String(offset) });
-    const data = await text(`https://makerworld.com/api/v1/search-service/select/design2?${params}`, true);
-    return data.hits || [];
-  }
-  function makerworldCard(d) { return {
-      source:'makerworld',
-      url:`https://makerworld.com/en/models/${d.id}${d.slug ? `-${d.slug}` : ''}`,
-      title:d.titleTranslated || d.title,
-      // The list endpoint does not send a long description, so use its real creator and tags.
-      description:[d.designCreator?.name && `By ${d.designCreator.name}`, ...(d.tags || []).slice(0,3)].filter(Boolean).join(' · ') || 'Open this model for details and print files.',
-      image:d.cover || d.coverLandscape || d.coverPortrait || d.designExtension?.design_pictures?.[0]?.url,
-      metricValue:d.downloadCount ?? d.likeCount,
-      metricLabel:d.downloadCount != null ? 'downloads' : d.likeCount != null ? 'likes' : ''
-    }; }
-  async function makerworld(q) {
-    const pageSize = 20;
-    const slices = [];
-    for (let start = 0; start < pageSize; start += 4) {
-      const batch = await Promise.allSettled(Array.from({length:Math.min(4, pageSize - start)}, (_, index) => makerworldSlice(q, start + index)));
-      slices.push(...batch);
-    }
-    const items = slices.flatMap(result => result.status === 'fulfilled' ? result.value.map(makerworldCard) : []);
-    if (!items.length) throw Error('MakerWorld unavailable');
-    return { paginated:true, items };
-  }
-  async function printables(q) {
-    const query = `query SearchModels($query:String!,$limit:Int,$ordering:SearchChoicesEnum){result:searchPrints2(query:$query,printType:print,limit:$limit,ordering:$ordering){items{id name slug likesCount downloadCount user{publicUsername} image{filePath}}}}`;
-    const response = await fetch('https://api.printables.com/graphql/', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({operationName:'SearchModels',query,variables:{query:q,limit:20,ordering:'best_match'}}) });
-    if (!response.ok) throw Error('Printables unavailable');
-    const models = (await response.json()).data?.result?.items || [];
-    return { paginated:true, items:models.map(m => ({ source:'printables', url:`https://www.printables.com/model/${m.id}-${m.slug}`, title:m.name, description:m.user?.publicUsername ? `By ${m.user.publicUsername}` : 'Open this model for details and print files.', image:m.image?.filePath ? `https://media.printables.com/${m.image.filePath.replace(/^\//,'')}` : '', metricValue:m.downloadCount ?? m.likesCount, metricLabel:m.downloadCount != null ? 'downloads' : m.likesCount != null ? 'likes' : '' })) };
-  }
-  async function scrape(source, q, pattern, base) {
-    const html = await text(info[source].search(q));
-    const urls = unique([...html.matchAll(pattern)].map(m => new URL(m[1],base).href));
-    const items = (await Promise.allSettled(urls.map(url => details(source,url)))).filter(x=>x.status==='fulfilled').map(x=>x.value);
-    return { paginated:/(?:rel=["']next|aria-label=["'][^"']*next|[?&]page=\d+)/i.test(html), items };
-  }
   async function getResults(q) {
-    const settled = await Promise.allSettled([
-      makerworld(q),
-      printables(q).catch(() => scrape('printables',q,/href=["'](\/model\/\d+(?:[-/][^"'#?]+)?)["']/gi,'https://www.printables.com')),
-      scrape('thingiverse',q,/href=["'](\/thing:\d+)["']/gi,'https://www.thingiverse.com')
-    ]);
-    const names = ['makerworld','printables','thingiverse'];
-    const groups = Object.fromEntries(names.map((name,i) => [name, settled[i].status==='fulfilled' && settled[i].value.items.length ? settled[i].value : { paginated:false, unavailable:true, items:[{source:name,url:info[name].search(q),title:`Search ${info[name].name} for “${q}”`,description:'Open the library to view its live results.',image:'',metricValue:null,metricLabel:''}] }]));
-    const available = names.map(n=>groups[n]).filter(g=>!g.unavailable);
-    const smallestPage = Math.min(...available.map(g=>g.items.length));
-    names.forEach(n => { if (!groups[n].paginated && !groups[n].unavailable) groups[n].items = groups[n].items.slice(0,smallestPage); });
-    const out=[]; for(let i=0;i<Math.max(...names.map(n=>groups[n].items.length));i++) names.forEach(n=>groups[n].items[i]&&out.push(groups[n].items[i])); return out;
+    if (API_BASE.includes('YOUR-WORKER')) throw Error('Add your Cloudflare Worker URL to index.html first.');
+    const response = await fetch(`${API_BASE}/api/search?q=${encodeURIComponent(q)}`);
+    const payload = await response.json();
+    if (!response.ok) throw Error(payload.error || 'Search failed');
+    return payload.results;
   }
   function card(m) { const site=info[m.source], safe=x=>String(x||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); const metric=m.metricLabel ? `<div class="metric ${m.metricLabel === 'likes' ? 'likes' : ''}">${Number(m.metricValue).toLocaleString()} ${m.metricLabel}</div>` : ''; return `<article class="card ${site.cls}"><a class="image" href="${safe(m.url)}" target="_blank" rel="noreferrer">${m.image?`<img src="${safe(m.image)}" alt="${safe(m.title)}" onerror="this.remove()">`:'<div class="placeholder">◒</div>'}<span class="badge">${site.name}</span></a><div class="copy"><div class="site">${site.name}</div><h3><a href="${safe(m.url)}" target="_blank" rel="noreferrer">${safe(m.title||'Untitled model')}</a></h3><p>${safe(m.description||'Open this model for details and print files.')}</p>${metric}<a class="open" href="${safe(m.url)}" target="_blank" rel="noreferrer">View model <span>↗</span></a></div></article>`; }
   $('#search').addEventListener('submit', async e => { e.preventDefault(); const q=$('#q').value.trim(); if(!q)return; $('#heading').textContent=`Searching for “${q}”`; $('#eyebrow').textContent='SEARCHING LIBRARIES'; $('#hint').textContent='Gathering the best matches…'; $('#results').innerHTML='<div class="message">Searching MakerWorld, Printables, and Thingiverse…</div>'; try { const results=await getResults(q); $('#heading').textContent=`Results for “${q}”`; $('#eyebrow').textContent=`${results.length} RESULTS`; $('#hint').textContent='MakerWorld → Printables → Thingiverse'; $('#results').innerHTML=results.map(card).join(''); } catch { $('#heading').textContent='Search unavailable'; $('#eyebrow').textContent='TRY AGAIN'; $('#hint').textContent=''; $('#results').innerHTML='<div class="message"><strong>The libraries did not respond.</strong>Please try again in a moment.</div>'; } });
