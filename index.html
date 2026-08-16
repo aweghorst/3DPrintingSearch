@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Print Scout</title>
+  <style>
+    :root { --ink:#132527; --paper:#f7f5ee; --line:#d7ddd8; --muted:#697779; }
+    * { box-sizing:border-box } body { margin:0; background:var(--paper); color:var(--ink); font:16px/1.45 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { max-width:1120px; margin:auto; padding:68px 24px } .brand { font-weight:800; letter-spacing:-.05em; font-size:22px } .brand i { color:#177d60; font-style:normal }
+    h1 { max-width:760px; margin:65px 0 14px; font-size:clamp(48px,8vw,92px); line-height:.92; letter-spacing:-.075em } h1 em { font-family:Georgia,serif; font-weight:normal }
+    .intro { color:var(--muted); max-width:600px; margin-bottom:29px } form { display:flex; max-width:780px; padding:7px; gap:8px; border:1.5px solid var(--ink); border-radius:7px; background:#fffefa; box-shadow:5px 5px 0 var(--ink) }
+    input { flex:1; min-width:0; padding:12px 14px; border:0; outline:0; background:none; font:inherit } button { border:0; border-radius:4px; padding:13px 19px; background:var(--ink); color:white; cursor:pointer; font-weight:700 } button:hover { background:#284346 }
+    .sources { margin:20px 0 66px; color:var(--muted); font-size:12px; letter-spacing:.05em; text-transform:uppercase }.sources b { font-weight:700 }.mw {color:#16795e}.pr {color:#d75335}.tv {color:#1974c9}
+    .top { display:flex; justify-content:space-between; align-items:end; gap:16px; border-top:1px solid var(--line); padding-top:35px; margin-bottom:24px } h2 { margin:0; font-size:27px; letter-spacing:-.045em }.hint { color:var(--muted); font-size:12px; text-align:right }
+    #results { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:22px }.card { overflow:hidden; background:#fffefa; border:1px solid var(--line); border-radius:6px; transition:transform .2s,box-shadow .2s }.card:hover { transform:translateY(-3px); box-shadow:0 10px 20px #10222518 }
+    .image { position:relative; display:block; aspect-ratio:1.5; overflow:hidden; background:linear-gradient(135deg,#dce9e2,#bdccc4); }.image img { width:100%; height:100%; object-fit:cover }.placeholder { display:grid; place-items:center; height:100%; color:#5e766e; font-size:34px }.badge { position:absolute; top:11px; left:11px; padding:4px 7px; color:#fff; background:var(--ink); border-radius:3px; font-size:11px; font-weight:700 }.mw .badge{background:#177d60}.pr .badge{background:#df5d3d}.tv .badge{background:#1974c9}
+    .copy { padding:15px 16px 17px }.site { color:var(--muted); font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.07em }.copy h3 { margin:7px 0; font-size:18px; line-height:1.15; letter-spacing:-.035em }.copy p { min-height:42px; margin:0 0 15px; color:var(--muted); font-size:13px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden }.copy a { color:inherit; text-decoration:none }.open { font-size:12px; font-weight:800; text-transform:uppercase; letter-spacing:.04em }.open span { color:#208d6b; margin-left:3px }
+    .message { grid-column:1/-1; padding:36px; text-align:center; border:1px dashed #b9c5bd; color:var(--muted) }.message strong { display:block; color:var(--ink); margin-bottom:5px }
+    @media(max-width:700px) { main { padding:35px 17px }.brand{font-size:19px}h1{margin-top:48px}.sources{margin-bottom:45px}form{flex-wrap:wrap}button{width:100%}.top{align-items:start;flex-direction:column}.hint{text-align:left}#results{grid-template-columns:1fr}.image{aspect-ratio:1.7} }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand">print <i>scout</i></div>
+    <h1>Find the model<br><em>worth printing.</em></h1>
+    <p class="intro">One search across MakerWorld, Printables, and Thingiverse. Results take turns, so you see the first match from every library before the second.</p>
+    <form id="search"><input id="q" type="search" placeholder="What do you want to print?" required autofocus><button>Search models ↗</button></form>
+    <p class="sources">Searching &nbsp;·&nbsp; <b class="mw">MakerWorld</b> &nbsp;·&nbsp; <b class="pr">Printables</b> &nbsp;·&nbsp; <b class="tv">Thingiverse</b></p>
+    <section>
+      <div class="top"><div><small id="eyebrow">READY WHEN YOU ARE</small><h2 id="heading">Search all three libraries</h2></div><div class="hint" id="hint">MakerWorld → Printables → Thingiverse</div></div>
+      <div id="results"><div class="message"><strong>Start with an idea.</strong>Try “articulated dragon”, “cable organizer”, or “plant pot”.</div></div>
+    </section>
+  </main>
+<script>
+  // The proxy makes a static GitHub Pages deployment possible. Replace it with your own
+  // tiny serverless proxy for a production app to avoid public-proxy rate limits.
+  const proxy = url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+  const info = {
+    makerworld: { name:'MakerWorld', cls:'mw', search:q=>`https://makerworld.com/en/search/models?keyword=${encodeURIComponent(q)}` },
+    printables: { name:'Printables', cls:'pr', search:q=>`https://www.printables.com/search/models?q=${encodeURIComponent(q)}` },
+    thingiverse: { name:'Thingiverse', cls:'tv', search:q=>`https://www.thingiverse.com/search?q=${encodeURIComponent(q)}&type=things&sort=relevant` }
+  };
+  const $ = s => document.querySelector(s);
+  const timeout = ms => new Promise((_, reject) => setTimeout(() => reject(new Error('Timed out')), ms));
+  async function text(url, json=false) { const r = await Promise.race([fetch(proxy(url)), timeout(14000)]); if (!r.ok) throw Error('Source unavailable'); return json ? r.json() : r.text(); }
+  const meta = (html, key) => { const doc = new DOMParser().parseFromString(html,'text/html'); return doc.querySelector(`meta[property="${key}"],meta[name="${key}"]`)?.content || ''; };
+  const unique = values => [...new Set(values)];
+  async function details(source, url) { const html = await text(url); return { source, url, title:meta(html,'og:title') || meta(html,'twitter:title'), description:meta(html,'og:description') || meta(html,'description'), image:meta(html,'og:image') || meta(html,'twitter:image') }; }
+  async function makerworld(q) {
+    const url = `https://makerworld.com/api/v1/search-service/suggest2?keyword=${encodeURIComponent(q)}&include=design`;
+    const data = await text(url, true), designs = data.design || data.data?.design || data.result?.design || [];
+    return designs.slice(0,6).map(d => ({ source:'makerworld', url:`https://makerworld.com/en/models/${d.id}`, title:d.titleTranslated||d.title, description:d.summary||d.description||'Open this model for details and print files.', image:d.cover||d.coverUrl||d.image||d.thumbnail }));
+  }
+  async function scrape(source, q, pattern, base) {
+    const html = await text(info[source].search(q));
+    const urls = unique([...html.matchAll(pattern)].map(m => new URL(m[1],base).href)).slice(0,6);
+    return (await Promise.allSettled(urls.map(url => details(source,url)))).filter(x=>x.status==='fulfilled').map(x=>x.value);
+  }
+  async function getResults(q) {
+    const settled = await Promise.allSettled([
+      makerworld(q),
+      scrape('printables',q,/href=["'](\/model\/\d+(?:[-/][^"'#?]+)?)["']/gi,'https://www.printables.com'),
+      scrape('thingiverse',q,/href=["'](\/thing:\d+)["']/gi,'https://www.thingiverse.com')
+    ]);
+    const names = ['makerworld','printables','thingiverse'];
+    const groups = Object.fromEntries(names.map((name,i) => [name, settled[i].status==='fulfilled' && settled[i].value.length ? settled[i].value : [{source:name,url:info[name].search(q),title:`Search ${info[name].name} for “${q}”`,description:'Open the library to view its live results.',image:''}]]));
+    const out=[]; for(let i=0;i<Math.max(...names.map(n=>groups[n].length));i++) names.forEach(n=>groups[n][i]&&out.push(groups[n][i])); return out;
+  }
+  function card(m) { const site=info[m.source], safe=x=>String(x||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); return `<article class="card ${site.cls}"><a class="image" href="${safe(m.url)}" target="_blank" rel="noreferrer">${m.image?`<img src="${safe(m.image)}" alt="${safe(m.title)}" onerror="this.remove()">`:'<div class="placeholder">◒</div>'}<span class="badge">${site.name}</span></a><div class="copy"><div class="site">${site.name}</div><h3><a href="${safe(m.url)}" target="_blank" rel="noreferrer">${safe(m.title||'Untitled model')}</a></h3><p>${safe(m.description||'Open this model for details and print files.')}</p><a class="open" href="${safe(m.url)}" target="_blank" rel="noreferrer">View model <span>↗</span></a></div></article>`; }
+  $('#search').addEventListener('submit', async e => { e.preventDefault(); const q=$('#q').value.trim(); if(!q)return; $('#heading').textContent=`Searching for “${q}”`; $('#eyebrow').textContent='SEARCHING LIBRARIES'; $('#hint').textContent='Gathering the best matches…'; $('#results').innerHTML='<div class="message">Searching MakerWorld, Printables, and Thingiverse…</div>'; try { const results=await getResults(q); $('#heading').textContent=`Results for “${q}”`; $('#eyebrow').textContent=`${results.length} RESULTS`; $('#hint').textContent='MakerWorld → Printables → Thingiverse'; $('#results').innerHTML=results.map(card).join(''); } catch { $('#heading').textContent='Search unavailable'; $('#eyebrow').textContent='TRY AGAIN'; $('#hint').textContent=''; $('#results').innerHTML='<div class="message"><strong>The libraries did not respond.</strong>Please try again in a moment.</div>'; } });
+</script>
+</body>
+</html>
