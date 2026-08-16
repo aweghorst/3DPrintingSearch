@@ -15,7 +15,7 @@
     .top { display:flex; justify-content:space-between; align-items:end; gap:16px; border-top:1px solid var(--line); padding-top:35px; margin-bottom:24px } h2 { margin:0; font-size:27px; letter-spacing:-.045em }.hint { color:var(--muted); font-size:12px; text-align:right }
     #results { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:22px }.card { overflow:hidden; background:#fffefa; border:1px solid var(--line); border-radius:6px; transition:transform .2s,box-shadow .2s }.card:hover { transform:translateY(-3px); box-shadow:0 10px 20px #10222518 }
     .image { position:relative; display:block; aspect-ratio:1.5; overflow:hidden; background:linear-gradient(135deg,#dce9e2,#bdccc4); }.image img { width:100%; height:100%; object-fit:cover }.placeholder { display:grid; place-items:center; height:100%; color:#5e766e; font-size:34px }.badge { position:absolute; top:11px; left:11px; padding:4px 7px; color:#fff; background:var(--ink); border-radius:3px; font-size:11px; font-weight:700 }.mw .badge{background:#177d60}.pr .badge{background:#df5d3d}.tv .badge{background:#1974c9}
-    .copy { padding:15px 16px 17px }.site { color:var(--muted); font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.07em }.copy h3 { margin:7px 0; font-size:18px; line-height:1.15; letter-spacing:-.035em }.copy p { min-height:42px; margin:0 0 15px; color:var(--muted); font-size:13px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden }.copy a { color:inherit; text-decoration:none }.open { font-size:12px; font-weight:800; text-transform:uppercase; letter-spacing:.04em }.open span { color:#208d6b; margin-left:3px }
+    .copy { padding:15px 16px 17px }.site { color:var(--muted); font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.07em }.copy h3 { margin:7px 0; font-size:18px; line-height:1.15; letter-spacing:-.035em }.copy p { min-height:42px; margin:0 0 12px; color:var(--muted); font-size:13px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden }.metric { display:inline-block; margin:0 0 15px; color:#47625d; font-size:12px; font-weight:700 }.metric::before { content:'↓'; color:#208d6b; margin-right:5px }.metric.likes::before { content:'♥'; color:#de5b42 }.copy a { color:inherit; text-decoration:none }.open { font-size:12px; font-weight:800; text-transform:uppercase; letter-spacing:.04em }.open span { color:#208d6b; margin-left:3px }
     .message { grid-column:1/-1; padding:36px; text-align:center; border:1px dashed #b9c5bd; color:var(--muted) }.message strong { display:block; color:var(--ink); margin-bottom:5px }
     @media(max-width:700px) { main { padding:35px 17px }.brand{font-size:19px}h1{margin-top:48px}.sources{margin-bottom:45px}form{flex-wrap:wrap}button{width:100%}.top{align-items:start;flex-direction:column}.hint{text-align:left}#results{grid-template-columns:1fr}.image{aspect-ratio:1.7} }
   </style>
@@ -46,37 +46,56 @@
   async function text(url, json=false) { const r = await Promise.race([fetch(proxy(url)), timeout(14000)]); if (!r.ok) throw Error('Source unavailable'); return json ? r.json() : r.text(); }
   const meta = (html, key) => { const doc = new DOMParser().parseFromString(html,'text/html'); return doc.querySelector(`meta[property="${key}"],meta[name="${key}"]`)?.content || ''; };
   const unique = values => [...new Set(values)];
-  async function details(source, url) { const html = await text(url); return { source, url, title:meta(html,'og:title') || meta(html,'twitter:title'), description:meta(html,'og:description') || meta(html,'description'), image:meta(html,'og:image') || meta(html,'twitter:image') }; }
+  const firstCount = (html, keys) => { for (const key of keys) { const match = html.match(new RegExp(`(?:"|\\\\")${key}(?:"|\\\\")\\s*:\\s*(\\d+)`, 'i')); if (match) return Number(match[1]); } return null; };
+  async function details(source, url) {
+    const html = await text(url);
+    const downloads = firstCount(html, ['download_count','downloadCount']);
+    const likes = firstCount(html, ['like_count','likeCount','likesCount']);
+    return { source, url, title:meta(html,'og:title') || meta(html,'twitter:title'), description:meta(html,'og:description') || meta(html,'description'), image:meta(html,'og:image') || meta(html,'twitter:image'), metricValue:downloads ?? likes, metricLabel:downloads != null ? 'downloads' : likes != null ? 'likes' : '' };
+  }
   async function makerworld(q) {
     // `select/design2` is MakerWorld's ranked results endpoint. A searchSessionId
     // is returned in its response and is only needed if later pages are requested.
-    const params = new URLSearchParams({ orderBy:'score', designType:'0', isFromSearchList:'false', keyword:q, limit:'6', offset:'0' });
+    const params = new URLSearchParams({ orderBy:'score', designType:'0', isFromSearchList:'false', keyword:q, limit:'20', offset:'0' });
     const data = await text(`https://makerworld.com/api/v1/search-service/select/design2?${params}`, true);
-    return (data.hits || []).map(d => ({
+    return { paginated:true, items:(data.hits || []).map(d => ({
       source:'makerworld',
       url:`https://makerworld.com/en/models/${d.id}${d.slug ? `-${d.slug}` : ''}`,
       title:d.titleTranslated || d.title,
       // The list endpoint does not send a long description, so use its real creator and tags.
       description:[d.designCreator?.name && `By ${d.designCreator.name}`, ...(d.tags || []).slice(0,3)].filter(Boolean).join(' · ') || 'Open this model for details and print files.',
-      image:d.cover || d.coverLandscape || d.coverPortrait || d.designExtension?.design_pictures?.[0]?.url
-    }));
+      image:d.cover || d.coverLandscape || d.coverPortrait || d.designExtension?.design_pictures?.[0]?.url,
+      metricValue:d.downloadCount ?? d.likeCount,
+      metricLabel:d.downloadCount != null ? 'downloads' : d.likeCount != null ? 'likes' : ''
+    })) };
+  }
+  async function printables(q) {
+    const query = `query SearchModels($query:String!,$limit:Int,$ordering:SearchChoicesEnum){result:searchPrints2(query:$query,printType:print,limit:$limit,ordering:$ordering){items{id name slug likesCount downloadCount user{publicUsername} image{filePath}}}}`;
+    const response = await fetch('https://api.printables.com/graphql/', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({operationName:'SearchModels',query,variables:{query:q,limit:20,ordering:'best_match'}}) });
+    if (!response.ok) throw Error('Printables unavailable');
+    const models = (await response.json()).data?.result?.items || [];
+    return { paginated:true, items:models.map(m => ({ source:'printables', url:`https://www.printables.com/model/${m.id}-${m.slug}`, title:m.name, description:m.user?.publicUsername ? `By ${m.user.publicUsername}` : 'Open this model for details and print files.', image:m.image?.filePath ? `https://media.printables.com/${m.image.filePath.replace(/^\//,'')}` : '', metricValue:m.downloadCount ?? m.likesCount, metricLabel:m.downloadCount != null ? 'downloads' : m.likesCount != null ? 'likes' : '' })) };
   }
   async function scrape(source, q, pattern, base) {
     const html = await text(info[source].search(q));
-    const urls = unique([...html.matchAll(pattern)].map(m => new URL(m[1],base).href)).slice(0,6);
-    return (await Promise.allSettled(urls.map(url => details(source,url)))).filter(x=>x.status==='fulfilled').map(x=>x.value);
+    const urls = unique([...html.matchAll(pattern)].map(m => new URL(m[1],base).href));
+    const items = (await Promise.allSettled(urls.map(url => details(source,url)))).filter(x=>x.status==='fulfilled').map(x=>x.value);
+    return { paginated:/(?:rel=["']next|aria-label=["'][^"']*next|[?&]page=\d+)/i.test(html), items };
   }
   async function getResults(q) {
     const settled = await Promise.allSettled([
       makerworld(q),
-      scrape('printables',q,/href=["'](\/model\/\d+(?:[-/][^"'#?]+)?)["']/gi,'https://www.printables.com'),
+      printables(q).catch(() => scrape('printables',q,/href=["'](\/model\/\d+(?:[-/][^"'#?]+)?)["']/gi,'https://www.printables.com')),
       scrape('thingiverse',q,/href=["'](\/thing:\d+)["']/gi,'https://www.thingiverse.com')
     ]);
     const names = ['makerworld','printables','thingiverse'];
-    const groups = Object.fromEntries(names.map((name,i) => [name, settled[i].status==='fulfilled' && settled[i].value.length ? settled[i].value : [{source:name,url:info[name].search(q),title:`Search ${info[name].name} for “${q}”`,description:'Open the library to view its live results.',image:''}]]));
-    const out=[]; for(let i=0;i<Math.max(...names.map(n=>groups[n].length));i++) names.forEach(n=>groups[n][i]&&out.push(groups[n][i])); return out;
+    const groups = Object.fromEntries(names.map((name,i) => [name, settled[i].status==='fulfilled' && settled[i].value.items.length ? settled[i].value : { paginated:false, unavailable:true, items:[{source:name,url:info[name].search(q),title:`Search ${info[name].name} for “${q}”`,description:'Open the library to view its live results.',image:'',metricValue:null,metricLabel:''}] }]));
+    const available = names.map(n=>groups[n]).filter(g=>!g.unavailable);
+    const smallestPage = Math.min(...available.map(g=>g.items.length));
+    names.forEach(n => { if (!groups[n].paginated && !groups[n].unavailable) groups[n].items = groups[n].items.slice(0,smallestPage); });
+    const out=[]; for(let i=0;i<Math.max(...names.map(n=>groups[n].items.length));i++) names.forEach(n=>groups[n].items[i]&&out.push(groups[n].items[i])); return out;
   }
-  function card(m) { const site=info[m.source], safe=x=>String(x||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); return `<article class="card ${site.cls}"><a class="image" href="${safe(m.url)}" target="_blank" rel="noreferrer">${m.image?`<img src="${safe(m.image)}" alt="${safe(m.title)}" onerror="this.remove()">`:'<div class="placeholder">◒</div>'}<span class="badge">${site.name}</span></a><div class="copy"><div class="site">${site.name}</div><h3><a href="${safe(m.url)}" target="_blank" rel="noreferrer">${safe(m.title||'Untitled model')}</a></h3><p>${safe(m.description||'Open this model for details and print files.')}</p><a class="open" href="${safe(m.url)}" target="_blank" rel="noreferrer">View model <span>↗</span></a></div></article>`; }
+  function card(m) { const site=info[m.source], safe=x=>String(x||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); const metric=m.metricLabel ? `<div class="metric ${m.metricLabel === 'likes' ? 'likes' : ''}">${Number(m.metricValue).toLocaleString()} ${m.metricLabel}</div>` : ''; return `<article class="card ${site.cls}"><a class="image" href="${safe(m.url)}" target="_blank" rel="noreferrer">${m.image?`<img src="${safe(m.image)}" alt="${safe(m.title)}" onerror="this.remove()">`:'<div class="placeholder">◒</div>'}<span class="badge">${site.name}</span></a><div class="copy"><div class="site">${site.name}</div><h3><a href="${safe(m.url)}" target="_blank" rel="noreferrer">${safe(m.title||'Untitled model')}</a></h3><p>${safe(m.description||'Open this model for details and print files.')}</p>${metric}<a class="open" href="${safe(m.url)}" target="_blank" rel="noreferrer">View model <span>↗</span></a></div></article>`; }
   $('#search').addEventListener('submit', async e => { e.preventDefault(); const q=$('#q').value.trim(); if(!q)return; $('#heading').textContent=`Searching for “${q}”`; $('#eyebrow').textContent='SEARCHING LIBRARIES'; $('#hint').textContent='Gathering the best matches…'; $('#results').innerHTML='<div class="message">Searching MakerWorld, Printables, and Thingiverse…</div>'; try { const results=await getResults(q); $('#heading').textContent=`Results for “${q}”`; $('#eyebrow').textContent=`${results.length} RESULTS`; $('#hint').textContent='MakerWorld → Printables → Thingiverse'; $('#results').innerHTML=results.map(card).join(''); } catch { $('#heading').textContent='Search unavailable'; $('#eyebrow').textContent='TRY AGAIN'; $('#hint').textContent=''; $('#results').innerHTML='<div class="message"><strong>The libraries did not respond.</strong>Please try again in a moment.</div>'; } });
 </script>
 </body>
