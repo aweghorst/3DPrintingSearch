@@ -43,7 +43,14 @@
   };
   const $ = s => document.querySelector(s);
   const timeout = ms => new Promise((_, reject) => setTimeout(() => reject(new Error('Timed out')), ms));
-  async function text(url, json=false) { const r = await Promise.race([fetch(proxy(url)), timeout(14000)]); if (!r.ok) throw Error('Source unavailable'); return json ? r.json() : r.text(); }
+  async function text(url, json=false) {
+    const r = await Promise.race([fetch(proxy(url)), timeout(14000)]);
+    if (!r.ok) throw Error('Source unavailable');
+    const body = await r.text();
+    if (!json) return body;
+    try { return JSON.parse(body); }
+    catch { throw Error('The public proxy returned an incomplete response'); }
+  }
   const meta = (html, key) => { const doc = new DOMParser().parseFromString(html,'text/html'); return doc.querySelector(`meta[property="${key}"],meta[name="${key}"]`)?.content || ''; };
   const unique = values => [...new Set(values)];
   const firstCount = (html, keys) => { for (const key of keys) { const match = html.match(new RegExp(`(?:"|\\\\")${key}(?:"|\\\\")\\s*:\\s*(\\d+)`, 'i')); if (match) return Number(match[1]); } return null; };
@@ -53,12 +60,14 @@
     const likes = firstCount(html, ['like_count','likeCount','likesCount']);
     return { source, url, title:meta(html,'og:title') || meta(html,'twitter:title'), description:meta(html,'og:description') || meta(html,'description'), image:meta(html,'og:image') || meta(html,'twitter:image'), metricValue:downloads ?? likes, metricLabel:downloads != null ? 'downloads' : likes != null ? 'likes' : '' };
   }
-  async function makerworld(q) {
-    // `select/design2` is MakerWorld's ranked results endpoint. A searchSessionId
-    // is returned in its response and is only needed if later pages are requested.
-    const params = new URLSearchParams({ orderBy:'score', designType:'0', isFromSearchList:'false', keyword:q, limit:'20', offset:'0' });
+  async function makerworldSlice(q, offset) {
+    // The list response includes extensive model-file metadata. AllOrigins truncates
+    // a 20-item response, so request one ranked result at a time and reassemble page 1.
+    const params = new URLSearchParams({ orderBy:'score', designType:'0', isFromSearchList:'false', keyword:q, limit:'1', offset:String(offset) });
     const data = await text(`https://makerworld.com/api/v1/search-service/select/design2?${params}`, true);
-    return { paginated:true, items:(data.hits || []).map(d => ({
+    return data.hits || [];
+  }
+  function makerworldCard(d) { return {
       source:'makerworld',
       url:`https://makerworld.com/en/models/${d.id}${d.slug ? `-${d.slug}` : ''}`,
       title:d.titleTranslated || d.title,
@@ -67,7 +76,17 @@
       image:d.cover || d.coverLandscape || d.coverPortrait || d.designExtension?.design_pictures?.[0]?.url,
       metricValue:d.downloadCount ?? d.likeCount,
       metricLabel:d.downloadCount != null ? 'downloads' : d.likeCount != null ? 'likes' : ''
-    })) };
+    }; }
+  async function makerworld(q) {
+    const pageSize = 20;
+    const slices = [];
+    for (let start = 0; start < pageSize; start += 4) {
+      const batch = await Promise.allSettled(Array.from({length:Math.min(4, pageSize - start)}, (_, index) => makerworldSlice(q, start + index)));
+      slices.push(...batch);
+    }
+    const items = slices.flatMap(result => result.status === 'fulfilled' ? result.value.map(makerworldCard) : []);
+    if (!items.length) throw Error('MakerWorld unavailable');
+    return { paginated:true, items };
   }
   async function printables(q) {
     const query = `query SearchModels($query:String!,$limit:Int,$ordering:SearchChoicesEnum){result:searchPrints2(query:$query,printType:print,limit:$limit,ordering:$ordering){items{id name slug likesCount downloadCount user{publicUsername} image{filePath}}}}`;
